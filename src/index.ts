@@ -16,6 +16,9 @@ import { OutboundDispatcher, Logger as DispatcherLogger } from './OutboundDispat
 import { InboundWebhookServer } from './InboundWebhookServer';
 import { PluginConfig, StateChangeEvent } from './types';
 
+// Re-export types for third-party parser developers
+export { LogParser, StateChangeEvent } from './types';
+
 const PLATFORM_NAME = 'HomebridgeHaSync';
 const PLUGIN_NAME = 'homebridge-ha-sync';
 
@@ -24,8 +27,13 @@ class HomebridgeHaSyncPlatform implements DynamicPlatformPlugin {
   public readonly Characteristic: typeof Characteristic = this.api.hap.Characteristic;
 
   private readonly config: PluginConfig;
-  private readonly accessories = new Map<string, PlatformAccessory>();
-  
+
+  // Accessories registered with this platform (won't include Broadlink ones)
+  private readonly ownedAccessories = new Map<string, PlatformAccessory>();
+
+  // All accessories discovered across all platforms (populated after didFinishLaunching)
+  private readonly allAccessories = new Map<string, PlatformAccessory>();
+
   // Components
   private stateStore?: StateStore;
   private debouncer?: Debouncer;
@@ -51,53 +59,143 @@ class HomebridgeHaSyncPlatform implements DynamicPlatformPlugin {
     }
 
     // Set defaults
-    if (!this.config.debounceMs) {
-      this.config.debounceMs = 1500;
-    }
-    if (!this.config.accessoryMappings) {
-      this.config.accessoryMappings = [];
-    }
+    this.config.debounceMs = this.config.debounceMs ?? 1500;
+    this.config.accessoryMappings = this.config.accessoryMappings ?? [];
 
     this.log.debug('HomebridgeHaSyncPlatform initialized');
 
-    // Start components when homebridge is ready
     this.api.on('didFinishLaunching', () => {
-      this.startComponents();
+      this.discoverAllAccessories();
+      void this.startComponents();
     });
 
-    // Clean shutdown
-    process.on('SIGTERM', () => this.stop());
-    process.on('SIGINT', () => this.stop());
+    process.on('SIGTERM', () => void this.stop());
+    process.on('SIGINT', () => void this.stop());
   }
 
-  configureAccessory(accessory: PlatformAccessory) {
-    this.log.info('Loading accessory from cache:', accessory.displayName);
-    this.accessories.set(accessory.displayName, accessory);
+  // Called by Homebridge for accessories cached under THIS platform only
+  configureAccessory(accessory: PlatformAccessory): void {
+    this.ownedAccessories.set(accessory.displayName, accessory);
   }
 
-  private async startComponents() {
+  /**
+   * After all plugins have loaded, walk the Homebridge internal accessory registry
+   * to collect every accessory regardless of which plugin owns it.
+   * We use (api as any)._bridge which is the HAP Bridge instance — the only way
+   * to access cross-plugin accessories without requiring insecure mode.
+   */
+  private discoverAllAccessories(): void {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const bridge = (this.api as any)._bridge;
+      if (!bridge) {
+        this.log.warn('HomebridgeHaSyncPlatform: cannot access bridge — inbound updates will be limited to owned accessories');
+        // Fall back to owned accessories
+        for (const [name, acc] of this.ownedAccessories) {
+          this.allAccessories.set(name, acc);
+        }
+        return;
+      }
+
+      // The bridge has a .bridgedAccessories array of HAP Accessory objects
+      // and each has a displayName. We match by displayName against our mappings.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const bridged: any[] = bridge.bridgedAccessories ?? [];
+      let found = 0;
+      for (const hapAccessory of bridged) {
+        const name: string = hapAccessory.displayName ?? '';
+        if (!name) continue;
+        // We only care about accessories that are in our mappings
+        const isMapped = this.config.accessoryMappings.some(
+          (m) => m.homebridgeName === name,
+        );
+        if (isMapped) {
+          // Wrap the raw HAP accessory so we can call updateCharacteristic on it
+          this.allAccessories.set(name, hapAccessory as unknown as PlatformAccessory);
+          found++;
+          this.log.info(`HomebridgeHaSyncPlatform: discovered mapped accessory "${name}"`);
+        }
+      }
+
+      if (found === 0 && this.config.accessoryMappings.length > 0) {
+        this.log.warn(
+          'HomebridgeHaSyncPlatform: no mapped accessories found in bridge. ' +
+          'Make sure homebridgeName values in accessoryMappings exactly match the Homebridge accessory names.',
+        );
+      }
+    } catch (err) {
+      this.log.warn(`HomebridgeHaSyncPlatform: error discovering accessories: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Given an accessory name, update its WindowCovering characteristics.
+   * This is what gets called when HA sends a position update via the inbound webhook.
+   */
+  private updateAccessoryPosition(name: string, position: number): void {
+    const accessory = this.allAccessories.get(name);
+    if (!accessory) {
+      this.log.warn(`HomebridgeHaSyncPlatform: accessory "${name}" not found for inbound update`);
+      return;
+    }
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const hapAcc = accessory as any;
+
+      // Find the WindowCovering service — check both direct services array and
+      // the nested bridgedAccessories structure depending on Homebridge version
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let wcService: any = null;
+
+      // Standard: accessory has a .services array
+      if (Array.isArray(hapAcc.services)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        wcService = hapAcc.services.find((s: any) =>
+          s.UUID === this.Service.WindowCovering.UUID,
+        );
+      }
+
+      if (!wcService) {
+        // Try getService if it's a PlatformAccessory
+        wcService = hapAcc.getService?.(this.Service.WindowCovering);
+      }
+
+      if (!wcService) {
+        this.log.warn(`HomebridgeHaSyncPlatform: no WindowCovering service on "${name}"`);
+        return;
+      }
+
+      // Update CurrentPosition, TargetPosition, and PositionState
+      const clampedPosition = Math.max(0, Math.min(100, Math.round(position)));
+
+      wcService.getCharacteristic(this.Characteristic.CurrentPosition)
+        ?.updateValue(clampedPosition);
+      wcService.getCharacteristic(this.Characteristic.TargetPosition)
+        ?.updateValue(clampedPosition);
+      wcService.getCharacteristic(this.Characteristic.PositionState)
+        ?.updateValue(this.Characteristic.PositionState.STOPPED);
+
+      this.log.info(`HomebridgeHaSyncPlatform: updated "${name}" position → ${clampedPosition}%`);
+    } catch (err) {
+      this.log.error(
+        `HomebridgeHaSyncPlatform: failed to update "${name}": ${(err as Error).message}`,
+      );
+    }
+  }
+
+  private async startComponents(): Promise<void> {
     try {
       // 1. StateStore
       this.stateStore = new StateStore(
         this.config.stateCachePath,
-        { warn: (msg) => this.log.warn(msg) }
+        { warn: (msg) => this.log.warn(msg) },
       );
-      
       if (this.config.stateCachePath) {
         await this.stateStore.loadFromDisk();
       }
 
-      // 2. Debouncer
-      this.debouncer = new Debouncer(
-        this.config.debounceMs,
-        (event: StateChangeEvent) => {
-          this.outboundDispatcher?.dispatch(event).catch((err) => {
-            this.log.error('Outbound dispatch error:', err.message);
-          });
-        }
-      );
-
-      // 3. OutboundDispatcher
+      // 2. Debouncer → OutboundDispatcher
       this.outboundDispatcher = new OutboundDispatcher(
         this.config,
         this.stateStore,
@@ -105,20 +203,27 @@ class HomebridgeHaSyncPlatform implements DynamicPlatformPlugin {
           info: (msg) => this.log.info(msg),
           error: (msg) => this.log.error(msg),
           debug: (msg) => this.log.debug(msg),
-        } as DispatcherLogger
+        } as DispatcherLogger,
       );
 
-      // 4. ParserRegistry (loads parsers from dist/parsers/)
+      this.debouncer = new Debouncer(
+        this.config.debounceMs,
+        (event: StateChangeEvent) => {
+          this.outboundDispatcher!.dispatch(event).catch((err) => {
+            this.log.error(`Outbound dispatch error: ${(err as Error).message}`);
+          });
+        },
+      );
+
+      // 3. ParserRegistry — loads parsers from dist/parsers/
       this.parserRegistry = new ParserRegistry({
         info: (msg) => this.log.info(msg),
         warn: (msg) => this.log.warn(msg),
         debug: (msg) => this.log.debug(msg),
       });
-      
-      const parsersDir = path.join(__dirname, 'parsers');
-      this.parserRegistry.loadFromDirectory(parsersDir);
+      this.parserRegistry.loadFromDirectory(path.join(__dirname, 'parsers'));
 
-      // 5. LogTailer
+      // 4. LogTailer
       this.logTailer = new LogTailer({
         filePath: this.config.logFilePath,
         onLine: (line: string) => {
@@ -128,7 +233,7 @@ class HomebridgeHaSyncPlatform implements DynamicPlatformPlugin {
           }
         },
         onError: (err: Error) => {
-          this.log.error('LogTailer error:', err.message);
+          this.log.error(`LogTailer error: ${err.message}`);
         },
         logger: {
           info: (msg) => this.log.info(msg),
@@ -139,15 +244,15 @@ class HomebridgeHaSyncPlatform implements DynamicPlatformPlugin {
       });
       this.logTailer.start();
 
-      // 6. InboundWebhookServer
+      // 5. InboundWebhookServer
+      // Build handles that call updateAccessoryPosition for each mapped accessory
       const accessoryHandles = new Map<string, { setValue(value: number): void }>();
-      for (const [name] of this.accessories.entries()) {
-        // Create a simple handle for each accessory
+      for (const mapping of this.config.accessoryMappings) {
+        const name = mapping.homebridgeName;
         accessoryHandles.set(name, {
           setValue: (value: number) => {
-            // Update accessory characteristic - simplified for now
-            this.log.debug(`Setting ${name} to ${value}%`);
-          }
+            this.updateAccessoryPosition(name, value);
+          },
         });
       }
 
@@ -160,36 +265,27 @@ class HomebridgeHaSyncPlatform implements DynamicPlatformPlugin {
           error: (msg) => this.log.error(msg),
           warn: (msg) => this.log.warn(msg),
           debug: (msg) => this.log.debug(msg),
-        }
+        },
       );
-      
       await this.webhookServer.start();
 
-      this.log.info('HomebridgeHaSyncPlatform: all components started successfully');
-
-    } catch (error) {
-      this.log.error('Failed to start components:', error);
+      this.log.info(
+        `HomebridgeHaSyncPlatform: started — watching ${this.config.accessoryMappings.length} accessory mapping(s), inbound webhook on port ${this.config.webhookPort}`,
+      );
+    } catch (err) {
+      this.log.error(`HomebridgeHaSyncPlatform: failed to start: ${(err as Error).message}`);
     }
   }
 
-  private async stop() {
+  private async stop(): Promise<void> {
     this.log.info('HomebridgeHaSyncPlatform: stopping...');
-    
     this.debouncer?.clearAll();
     this.logTailer?.stop();
-    
-    if (this.webhookServer) {
-      await this.webhookServer.stop();
-    }
-
+    await this.webhookServer?.stop();
     this.log.info('HomebridgeHaSyncPlatform: stopped');
   }
 }
 
-// Re-export types for third-party parser developers
-export { LogParser, StateChangeEvent } from './types';
-
-// Default export the plugin registration function
 export default (api: API) => {
   api.registerPlatform(PLUGIN_NAME, PLATFORM_NAME, HomebridgeHaSyncPlatform);
 };
