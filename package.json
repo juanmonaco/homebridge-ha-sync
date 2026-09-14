@@ -1,14 +1,13 @@
 {
   "name": "homebridge-ha-sync",
   "version": "0.1.0",
-  "description": "Bidirectional Homebridge ↔ Home Assistant state sync plugin",
+  "description": "Bidirectional Homebridge \u2194 Home Assistant state sync plugin",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
     "test": "jest --runInBand",
     "lint": "eslint \"src/**/*.ts\"",
-    "prepare": "npm run build",
     "prepublishOnly": "npm test && npm run build"
   },
   "engines": {
