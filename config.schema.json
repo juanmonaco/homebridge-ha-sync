@@ -1,0 +1,74 @@
+{
+  "pluginAlias": "HomebridgeHaSync",
+  "pluginType": "platform",
+  "singular": true,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "HomebridgeHaSync"
+      },
+      "haUrl": {
+        "title": "Home Assistant URL",
+        "type": "string",
+        "placeholder": "http://homeassistant.local:8123",
+        "required": true
+      },
+      "haToken": {
+        "title": "Long-Lived Access Token",
+        "type": "string",
+        "required": true,
+        "secret": true,
+        "description": "Generate in HA: Profile → Long-Lived Access Tokens"
+      },
+      "logFilePath": {
+        "title": "Homebridge Log File Path",
+        "type": "string",
+        "placeholder": "/var/lib/homebridge/homebridge.log",
+        "required": true
+      },
+      "webhookPort": {
+        "title": "Inbound Webhook Port",
+        "type": "integer",
+        "placeholder": 3001,
+        "required": true,
+        "description": "Port this plugin listens on for state changes pushed from Home Assistant"
+      },
+      "debounceMs": {
+        "title": "Debounce Period (ms)",
+        "type": "integer",
+        "default": 1500,
+        "description": "How long to wait after the last position update before forwarding to HA. Prevents flooding during blind movement."
+      },
+      "stateCachePath": {
+        "title": "State Cache File Path",
+        "type": "string",
+        "description": "Optional path to persist last-known positions across restarts (e.g. /var/lib/homebridge/ha-sync-state.json)"
+      },
+      "accessoryMappings": {
+        "title": "Accessory Mappings",
+        "type": "array",
+        "items": {
+          "title": "Mapping",
+          "type": "object",
+          "properties": {
+            "homebridgeName": {
+              "title": "Homebridge Accessory Name",
+              "type": "string",
+              "description": "Must match exactly the name shown in Homebridge logs (e.g. 'Blinds 7')",
+              "required": true
+            },
+            "entityId": {
+              "title": "Home Assistant Entity ID",
+              "type": "string",
+              "description": "The HA entity to update (e.g. 'cover.blinds_7')",
+              "required": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
