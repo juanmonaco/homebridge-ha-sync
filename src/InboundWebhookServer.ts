@@ -74,17 +74,25 @@ export class InboundWebhookServer {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
+    const remoteIp = req.socket.remoteAddress ?? 'unknown';
+
     // Only handle POST /webhook
     if (req.method !== 'POST' || req.url !== '/webhook') {
+      this.logger.info(
+        `[ha-sync] ← 404 ${req.method} ${req.url} from ${remoteIp} — not a webhook endpoint`,
+      );
       sendJson(res, 404, {});
       return;
     }
+
+    this.logger.info(`[ha-sync] ← POST /webhook from ${remoteIp}`);
 
     // Read body
     let rawBody: string;
     try {
       rawBody = await this.readBody(req);
     } catch {
+      this.logger.info(`[ha-sync] ← 400 bad request from ${remoteIp} — invalid JSON`);
       sendJson(res, 400, { error: 'Invalid request body' });
       return;
     }
@@ -94,6 +102,7 @@ export class InboundWebhookServer {
     try {
       body = JSON.parse(rawBody) as WebhookBody;
     } catch {
+      this.logger.info(`[ha-sync] ← 400 bad request from ${remoteIp} — invalid JSON`);
       sendJson(res, 400, { error: 'Invalid request body' });
       return;
     }
@@ -101,6 +110,7 @@ export class InboundWebhookServer {
     // Validate accessoryName
     const { accessoryName, value } = body;
     if (typeof accessoryName !== 'string' || accessoryName.trim() === '') {
+      this.logger.info(`[ha-sync] ← 400 bad request from ${remoteIp} — missing accessoryName`);
       sendJson(res, 400, { error: 'Invalid request body' });
       return;
     }
@@ -111,6 +121,7 @@ export class InboundWebhookServer {
       (typeof value !== 'number' && typeof value !== 'string') ||
       !isFinite(numericValue)
     ) {
+      this.logger.info(`[ha-sync] ← 400 bad request from ${remoteIp} — invalid value`);
       sendJson(res, 400, { error: 'Invalid request body' });
       return;
     }
@@ -118,6 +129,9 @@ export class InboundWebhookServer {
     // Look up accessory
     const accessory = this.accessories.get(accessoryName);
     if (!accessory) {
+      this.logger.info(
+        `[ha-sync] ← 404 accessory "${accessoryName}" not in mappings — known: [${[...this.accessories.keys()].join(', ')}]`,
+      );
       sendJson(res, 404, { error: 'Accessory not found' });
       return;
     }
@@ -126,8 +140,8 @@ export class InboundWebhookServer {
     this.stateStore.recordInboundOrigin(accessoryName, numericValue);
     accessory.setValue(numericValue);
 
-    this.logger.debug(
-      `InboundWebhookServer: updated "${accessoryName}" to ${numericValue}`,
+    this.logger.info(
+      `[ha-sync] ← ✓ "${accessoryName}" → ${numericValue}% (from ${remoteIp})`,
     );
 
     sendJson(res, 200, { ok: true });

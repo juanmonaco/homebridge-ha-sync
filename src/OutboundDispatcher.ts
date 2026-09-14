@@ -21,6 +21,7 @@ export class OutboundDispatcher {
       (m) => m.homebridgeName === event.accessoryName,
     );
     if (mapping === undefined) {
+      this.logger.debug(`[ha-sync] → no mapping for "${event.accessoryName}" — skipping`);
       return;
     }
     const { entityId } = mapping;
@@ -28,7 +29,7 @@ export class OutboundDispatcher {
     // 2. Dedup check — skip if same value already sent
     if (this.stateStore.getPosition(event.accessoryName) === event.value) {
       this.logger.debug(
-        `OutboundDispatcher: dedup — ${entityId} already at ${event.value}%, skipping POST`,
+        `[ha-sync] → skipped ${entityId} (already at ${event.value}%)`,
       );
       return;
     }
@@ -38,7 +39,7 @@ export class OutboundDispatcher {
     if (this.stateStore.isInboundOrigin(event.accessoryName, event.value, ttlMs)) {
       this.stateStore.clearOrigin(event.accessoryName);
       this.logger.debug(
-        `OutboundDispatcher: suppressed echo — ${entityId} value ${event.value}% originated from HA`,
+        `[ha-sync] → suppressed echo for "${event.accessoryName}" @ ${event.value}% (originated from HA)`,
       );
       return;
     }
@@ -57,12 +58,12 @@ export class OutboundDispatcher {
       // 5. On 2xx: update cache and log success
       if (response.status >= 200 && response.status < 300) {
         this.stateStore.setPosition(event.accessoryName, event.value);
-        this.logger.info(`OutboundDispatcher: Synced ${entityId} → ${event.value}%`);
+        this.logger.info(`[ha-sync] → HA ${entityId} = ${event.value}%`);
       } else {
         // 6. Non-2xx from axios (shouldn't normally reach here due to axios throwing, but guard anyway)
         const bodySnippet = JSON.stringify(response.data).slice(0, 200);
         this.logger.error(
-          `OutboundDispatcher: HA returned ${response.status} for ${entityId}: ${bodySnippet}`,
+          `[ha-sync] → HA ${entityId} failed — HTTP ${response.status}: ${bodySnippet}`,
         );
       }
     } catch (err) {
@@ -70,12 +71,12 @@ export class OutboundDispatcher {
         // 6. Non-2xx HTTP response (axios throws for these by default)
         const bodySnippet = JSON.stringify(err.response.data).slice(0, 200);
         this.logger.error(
-          `OutboundDispatcher: HA returned ${err.response.status} for ${entityId}: ${bodySnippet}`,
+          `[ha-sync] → HA ${entityId} failed — HTTP ${err.response.status}: ${bodySnippet}`,
         );
       } else {
         // 7. Network / timeout error
         this.logger.error(
-          `OutboundDispatcher: network error posting to ${entityId}: ${(err as Error).message}`,
+          `[ha-sync] → HA ${entityId} failed — ${(err as Error).message}`,
         );
       }
     }

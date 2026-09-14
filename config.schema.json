@@ -47,6 +47,12 @@
         "type": "string",
         "description": "Optional path to persist last-known positions across restarts (e.g. /var/lib/homebridge/ha-sync-state.json)"
       },
+      "verbose": {
+        "title": "Verbose Logging",
+        "type": "boolean",
+        "default": false,
+        "description": "Log every line read from the Homebridge log file and all parser/debounce decisions. Useful for troubleshooting. Disable in normal operation."
+      },
       "accessoryMappings": {
         "title": "Accessory Mappings",
         "type": "array",
