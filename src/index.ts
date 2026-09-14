@@ -176,7 +176,7 @@ class HomebridgeHaSyncPlatform implements DynamicPlatformPlugin {
       wcService.getCharacteristic(this.Characteristic.PositionState)
         ?.updateValue(this.Characteristic.PositionState.STOPPED);
 
-      this.log.info(`[ha-sync] ← applied "${name}" position → ${clampedPosition}% (HomeKit updated)`);
+      this.log.info(`HomebridgeHaSyncPlatform: updated "${name}" position → ${clampedPosition}%`);
     } catch (err) {
       this.log.error(
         `HomebridgeHaSyncPlatform: failed to update "${name}": ${(err as Error).message}`,
@@ -227,14 +227,8 @@ class HomebridgeHaSyncPlatform implements DynamicPlatformPlugin {
       this.logTailer = new LogTailer({
         filePath: this.config.logFilePath,
         onLine: (line: string) => {
-          if (this.config.verbose) {
-            this.log.debug(`[ha-sync] [verbose] raw: ${line}`);
-          }
           const event = this.parserRegistry?.route(line);
           if (event) {
-            if (this.config.verbose) {
-              this.log.debug(`[ha-sync] [verbose] matched: ${event.accessoryName} @ ${event.value}%`);
-            }
             this.debouncer?.push(event);
           }
         },
@@ -275,12 +269,6 @@ class HomebridgeHaSyncPlatform implements DynamicPlatformPlugin {
       );
       await this.webhookServer.start();
 
-      const mappingsSummary = this.config.accessoryMappings
-        .map((m) => `${m.homebridgeName} → ${m.entityId}`)
-        .join(', ');
-      this.log.info(
-        `[ha-sync] configured mappings: ${mappingsSummary || '(none)'}`,
-      );
       this.log.info(
         `HomebridgeHaSyncPlatform: started — watching ${this.config.accessoryMappings.length} accessory mapping(s), inbound webhook on port ${this.config.webhookPort}`,
       );

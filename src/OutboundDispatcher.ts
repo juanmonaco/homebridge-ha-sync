@@ -28,9 +28,7 @@ export class OutboundDispatcher {
 
     // 2. Dedup check — skip if same value already sent
     if (this.stateStore.getPosition(event.accessoryName) === event.value) {
-      this.logger.debug(
-        `[ha-sync] → skipped ${entityId} (already at ${event.value}%)`,
-      );
+      this.logger.debug(`[ha-sync] → skipped ${entityId} (already at ${event.value}%)`);
       return;
     }
 
@@ -46,9 +44,16 @@ export class OutboundDispatcher {
 
     // 4. POST to HA REST API
     const url = `${this.config.haUrl}/api/states/${entityId}`;
+    // Derive state string from position
+    const haState = event.value === 0 ? 'closed' : 'open';
+
     const body = {
-      state: String(event.value),
-      attributes: { unit_of_measurement: '%' },
+      state: haState,
+      attributes: {
+        current_position: event.value,
+        is_closed: event.value === 0,
+        device_class: 'blind',
+      },
     };
     const headers = { Authorization: `Bearer ${this.config.haToken}` };
 

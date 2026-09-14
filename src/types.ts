@@ -23,7 +23,6 @@ export interface PluginConfig {
   webhookPort: number;
   debounceMs: number;
   stateCachePath?: string;
-  verbose?: boolean;
   accessoryMappings: AccessoryMapping[];
 }
 
