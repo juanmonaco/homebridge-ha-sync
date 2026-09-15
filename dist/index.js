@@ -242,7 +242,8 @@ class HomebridgeHaSyncPlatform {
         this.log.info('HomebridgeHaSyncPlatform: stopped');
     }
 }
-exports.default = (api) => {
+// Use CommonJS export directly to ensure Homebridge can load it
+module.exports = (api) => {
     api.registerPlatform(PLUGIN_NAME, PLATFORM_NAME, HomebridgeHaSyncPlatform);
 };
 //# sourceMappingURL=index.js.map

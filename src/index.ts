@@ -286,6 +286,7 @@ class HomebridgeHaSyncPlatform implements DynamicPlatformPlugin {
   }
 }
 
-export default (api: API) => {
+// Use CommonJS export directly to ensure Homebridge can load it
+module.exports = (api: API) => {
   api.registerPlatform(PLUGIN_NAME, PLATFORM_NAME, HomebridgeHaSyncPlatform);
 };

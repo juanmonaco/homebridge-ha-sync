@@ -1,7 +1,7 @@
 {
-  "name": "homebridge-ha-sync",
+  "name": "@juanmonaco/homebridge-ha-sync",
   "version": "0.1.0",
-  "description": "Bidirectional Homebridge \u2194 Home Assistant state sync plugin",
+  "description": "Bidirectional Homebridge ↔ Home Assistant state sync plugin",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
