@@ -5,3 +5,4 @@ node_modules/
 state-cache.json
 .DS_Store
 coverage/
+install.sh

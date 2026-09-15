@@ -1,0 +1,143 @@
+#!/bin/bash
+# install.sh — Safe installation of homebridge-ha-sync to existing Homebridge
+set -e
+
+# CONFIGURATION - Update these values for your setup
+HB_HOST="YOUR_USER@YOUR_PI_IP"
+HB_PASS="YOUR_SSH_PASSWORD"
+PLUGIN_SRC="/home/familypi/persistent/homebridge-ha-sync"
+PLUGIN_DST="/home/familypi/persistent/homebridge/volumes/homebridge/node_modules/@juanmonaco/homebridge-ha-sync"
+CONFIG_PATH="/home/familypi/persistent/homebridge/volumes/homebridge/config.json"
+PACKAGE_PATH="/home/familypi/persistent/homebridge/volumes/homebridge/package.json"
+
+echo "======================================"
+echo "homebridge-ha-sync Installation Script"
+echo "======================================"
+echo ""
+
+# Step 1: Clone the repo on the Pi if it doesn't exist
+echo "[1/6] Checking if repo exists on Pi..."
+sshpass -p "$HB_PASS" ssh -o StrictHostKeyChecking=no "$HB_HOST" "
+if [ ! -d '$PLUGIN_SRC' ]; then
+  echo 'Cloning repository...'
+  cd /home/familypi/persistent
+  git clone https://github.com/juanmonaco/homebridge-ha-sync.git
+  echo 'Repository cloned'
+else
+  echo 'Repository already exists, pulling latest...'
+  cd '$PLUGIN_SRC' && git pull
+fi
+"
+
+# Step 2: Build the plugin using Docker (same node version as Homebridge)
+echo ""
+echo "[2/6] Building plugin..."
+sshpass -p "$HB_PASS" ssh -o StrictHostKeyChecking=no "$HB_HOST" "
+sudo docker run --rm \
+  -v '$PLUGIN_SRC:/plugin' \
+  node:24-alpine sh -c '
+    cd /plugin && 
+    npm ci --omit=dev 2>&1 | tail -2 && 
+    npm run build 2>&1 | tail -1 &&
+    echo Build complete
+  '
+"
+
+# Step 3: Create plugin directory structure
+echo ""
+echo "[3/6] Creating plugin directory..."
+sshpass -p "$HB_PASS" ssh -o StrictHostKeyChecking=no "$HB_HOST" "
+sudo mkdir -p '$PLUGIN_DST/dist'
+echo 'Directory created'
+"
+
+# Step 4: Copy built files
+echo ""
+echo "[4/6] Copying plugin files..."
+sshpass -p "$HB_PASS" ssh -o StrictHostKeyChecking=no "$HB_HOST" "
+sudo cp -r '$PLUGIN_SRC/dist/'* '$PLUGIN_DST/dist/'
+sudo cp '$PLUGIN_SRC/package.json' '$PLUGIN_DST/'
+sudo cp '$PLUGIN_SRC/config.schema.json' '$PLUGIN_DST/'
+echo 'Files copied'
+"
+
+# Step 5: Install runtime dependencies (axios, tail)
+echo ""
+echo "[5/6] Installing dependencies..."
+sshpass -p "$HB_PASS" ssh -o StrictHostKeyChecking=no "$HB_HOST" "
+sudo docker exec homebridge npm install --prefix /var/lib/homebridge/node_modules/@juanmonaco/homebridge-ha-sync --omit=dev --omit=optional 2>&1 | tail -2
+"
+
+# Step 6: Add to package.json (backup first)
+echo ""
+echo "[6/6] Adding to Homebridge package.json..."
+sshpass -p "$HB_PASS" ssh -o StrictHostKeyChecking=no "$HB_HOST" "
+# Backup current package.json
+sudo cp '$PACKAGE_PATH' '$PACKAGE_PATH.backup.\$(date +%Y%m%d_%H%M%S)'
+
+# Add ha-sync to dependencies if not already present
+sudo python3 << 'PYSCRIPT'
+import json
+
+pkg_path = '$PACKAGE_PATH'
+with open(pkg_path) as f:
+    pkg = json.load(f)
+
+# Only add if not already present
+if '@juanmonaco/homebridge-ha-sync' not in pkg.get('dependencies', {}):
+    pkg.setdefault('dependencies', {})['@juanmonaco/homebridge-ha-sync'] = 'github:juanmonaco/homebridge-ha-sync'
+    with open(pkg_path, 'w') as f:
+        json.dump(pkg, f, indent=4)
+    print('✅ Added @juanmonaco/homebridge-ha-sync to dependencies')
+else:
+    print('✅ @juanmonaco/homebridge-ha-sync already in dependencies')
+PYSCRIPT
+"
+
+# Step 7: Add platform configuration to config.json if not present
+echo ""
+echo "[7/7] Checking platform configuration..."
+sshpass -p "$HB_PASS" ssh -o StrictHostKeyChecking=no "$HB_HOST" "
+sudo python3 << 'PYSCRIPT'
+import json
+
+config_path = '$CONFIG_PATH'
+with open(config_path) as f:
+    config = json.load(f)
+
+# Check if platform already configured
+platforms = config.get('platforms', [])
+has_ha_sync = any(p.get('platform') == 'HomebridgeHaSync' for p in platforms)
+
+if not has_ha_sync:
+    print('⚠️  Platform not configured in config.json')
+    print('   You need to add the platform configuration manually via Homebridge UI or edit config.json')
+    print('')
+    print('   Add this to the platforms array:')
+    print('   {')
+    print('       \"platform\": \"HomebridgeHaSync\",')
+    print('       \"name\": \"HomebridgeHaSync\",')
+    print('       \"haUrl\": \"http://YOUR_HA_IP:8123\",')
+    print('       \"haToken\": \"YOUR_HA_TOKEN\",')
+    print('       \"logFilePath\": \"/homebridge/homebridge.log\",')
+    print('       \"webhookPort\": 3001,')
+    print('       \"debounceMs\": 1500,')
+    print('       \"verbose\": true,')
+    print('       \"stateCachePath\": \"/homebridge/ha-sync-state.json\",')
+    print('       \"accessoryMappings\": []')
+    print('   }')
+else:
+    print('✅ Platform already configured in config.json')
+PYSCRIPT
+"
+
+echo ""
+echo "======================================"
+echo "Installation complete!"
+echo "======================================"
+echo ""
+echo "Next steps:"
+echo "1. Restart Homebridge: sudo docker restart homebridge"
+echo "2. If not configured, add platform config via Homebridge UI"
+echo "3. Check logs: sudo docker logs homebridge | grep ha-sync"
+echo ""
